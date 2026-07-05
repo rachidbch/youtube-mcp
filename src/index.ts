@@ -133,6 +133,9 @@ function startHttp() {
 
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sessionId: string) => {
+          transports.set(sessionId, transport);
+        },
       });
 
       transport.onclose = () => {
@@ -143,10 +146,6 @@ function startHttp() {
 
       const mcpServer = createServer();
       await mcpServer.connect(transport);
-
-      if (transport.sessionId) {
-        transports.set(transport.sessionId, transport);
-      }
 
       await transport.handleRequest(req, res, req.body);
     } catch (err: unknown) {
