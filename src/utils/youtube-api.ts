@@ -20,6 +20,8 @@ import {
   YouTubeError,
 } from "./errors.js";
 import { logger } from "./logger.js";
+import { parseChannelRef, type ChannelRef } from "./parse-channel-id.js";
+import { parsePlaylistId } from "./parse-playlist-id.js";
 import { TTLCache } from "./ttl-cache.js";
 
 // SearchFilters type from youtubei.js (not directly exported)
@@ -108,6 +110,9 @@ const CACHE_MAX_ENTRIES = {
   videoInfo: 500,
   comments:  200,
   search:    200,
+  channelPlaylists: 200,
+  playlistVideos: 200,
+  downloadUrls: 200,
 };
 const videoInfoCache = new TTLCache<VideoInfo>(CACHE_MAX_ENTRIES.videoInfo);
 // commentsCache declared after CommentPage interface below
@@ -116,6 +121,10 @@ const CACHE_TTL = {
   videoInfo: 30 * 60 * 1000,   // 30 minutes
   comments:  10 * 60 * 1000,   // 10 minutes
   search:    15 * 60 * 1000,   // 15 minutes
+  channelPlaylists: 30 * 60 * 1000, // 30 minutes
+  playlistVideos: 15 * 60 * 1000,   // 15 minutes
+  // Signed URLs live ~6h; cache far below that so we never serve near-expiry links.
+  downloadUrls: 10 * 60 * 1000,     // 10 minutes
 };
 
 /**
@@ -128,6 +137,9 @@ export function resetForTesting(options: { retrievePlayer?: boolean } = {}): voi
   videoInfoCache.clear();
   commentsCache.clear();
   searchCache.clear();
+  channelPlaylistsCache.clear();
+  playlistVideosCache.clear();
+  downloadUrlCache.clear();
 }
 
 /** youtubei.js throws InnertubeError for its own failures; keep its message as the upstream reason. */
@@ -139,6 +151,7 @@ function wrapUpstream(err: unknown, what: string): never {
 
 export interface VideoInfo {
   videoId: string;
+  url: string;
   title: string;
   description: string | null;
   channelName: string | null;
@@ -196,6 +209,7 @@ export function fetchVideoInfo(videoId: string, signal?: AbortSignal): Promise<V
 
     const result: VideoInfo = {
       videoId,
+      url: `https://www.youtube.com/watch?v=${videoId}`,
       title: basic.title,
       description: basic.short_description ?? null,
       channelName: basic.channel?.name || basic.author || null,
@@ -702,4 +716,381 @@ function formatDuration(seconds: number): string {
   const s = secs > 0 ? `${secs}s` : "";
 
   return `${h}${m}${s}`.trim() || "0s";
+}
+
+// --- Channel playlists, playlist videos, download URLs (youtubei.js LockupView UI) ---
+// The modern InnerTube responses render channel playlists and playlist videos as
+// LockupView nodes. youtubei.js exposes them as untyped objects, so we read them
+// structurally via the minimal interfaces below (verified against 18.1.0 at runtime).
+
+interface LockupBadge {
+  icon_name?: string;
+  text?: string;
+}
+
+interface LockupLike {
+  content_id?: string;
+  content_type?: string;
+  metadata?: {
+    title?: { toString(): string };
+    metadata?: {
+      metadata_rows?: Array<{
+        metadata_parts?: Array<{ text?: { text?: string } | { toString(): string } }>;
+      }>;
+    };
+  };
+  content_image?: {
+    // CollectionThumbnailView (channel playlists): badges under primary_thumbnail
+    primary_thumbnail?: { overlays?: Array<{ badges?: LockupBadge[] }> };
+    // ThumbnailView (playlist videos): badges directly under content_image
+    overlays?: Array<{ badges?: LockupBadge[] }>;
+  };
+}
+
+interface MemoLike {
+  get(type: string): unknown[];
+}
+
+interface PlaylistFeedLike {
+  items: unknown[];
+  getContinuation(): Promise<PlaylistFeedLike>;
+}
+
+interface ChannelFeedLike {
+  page?: { contents_memo?: MemoLike };
+  memo?: MemoLike;
+  getContinuation(): Promise<ChannelFeedLike>;
+}
+
+function lockupsFromMemo(feed: ChannelFeedLike | undefined, fallback: unknown[]): LockupLike[] {
+  const raw = feed?.page?.contents_memo?.get("LockupView") ?? feed?.memo?.get("LockupView") ?? fallback;
+  return raw as LockupLike[];
+}
+
+/** Parse "113 videos" / "1.2K videos" style count text into a number. */
+function parseCountText(text: string | undefined | null): number | null {
+  if (!text) return null;
+  const m = text.match(/^([\d.,]+)\s*([KkMm]?)\s*videos?$/);
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(/,/g, ""));
+  if (!Number.isFinite(n)) return null;
+  const mult = m[2].toLowerCase() === "k" ? 1_000 : m[2].toLowerCase() === "m" ? 1_000_000 : 1;
+  return Math.round(n * mult);
+}
+
+/** Video count badge ("N videos") from a channel-playlist LockupView, when present. */
+function lockupVideoCount(item: LockupLike): number | null {
+  const badges = item.content_image?.primary_thumbnail?.overlays?.flatMap((o) => o.badges ?? []) ?? [];
+  for (const b of badges) {
+    if (b.icon_name === "PLAYLISTS") return parseCountText(b.text);
+  }
+  return null;
+}
+
+/** Duration badge text ("6:00", "1:02:03") from a playlist-video LockupView. */
+function lockupDurationText(item: LockupLike): string | null {
+  const badges = item.content_image?.overlays?.flatMap((o) => o.badges ?? []) ?? [];
+  for (const b of badges) {
+    if (b.text && /^\d{1,2}(:\d{2}){1,2}$/.test(b.text)) return b.text;
+  }
+  return null;
+}
+
+function durationTextToSeconds(text: string | null): number | null {
+  if (!text) return null;
+  const parts = text.split(":").map((p) => parseInt(p, 10));
+  if (parts.some((p) => !Number.isFinite(p))) return null;
+  return parts.reduce((acc, p) => acc * 60 + p, 0);
+}
+
+/** First metadata row's first part is the channel name ("Queen Official"). */
+function lockupChannelName(item: LockupLike): string | null {
+  const part = item.metadata?.metadata?.metadata_rows?.[0]?.metadata_parts?.[0]?.text;
+  if (!part) return null;
+  return typeof part === "string" ? part : "text" in part ? part.text ?? null : String(part);
+}
+
+export interface ChannelPlaylist {
+  playlistId: string;
+  title: string;
+  videoCount: number | null;
+  url: string;
+}
+
+export interface ChannelPlaylistsPage {
+  playlists: ChannelPlaylist[];
+  page: number;
+  hasMore: boolean;
+  totalFetched: number;
+}
+
+const channelPlaylistsCache = new TTLCache<ChannelPlaylistsPage>(CACHE_MAX_ENTRIES.channelPlaylists);
+
+async function resolveChannelId(yt: Innertube, ref: ChannelRef): Promise<string> {
+  if (ref.kind === "id") return ref.channel;
+  let browseId: unknown;
+  try {
+    const endpoint = await yt.resolveURL(ref.url);
+    browseId = (endpoint.payload as Record<string, unknown> | undefined)?.["browseId"];
+  } catch (err) {
+    if (err instanceof YouTubeError) throw err;
+    throw new YouTubeError("CHANNEL_UNAVAILABLE", `Could not resolve channel URL ${ref.url}`, {
+      reason: err instanceof Error ? err.message : String(err),
+    });
+  }
+  if (typeof browseId === "string" && browseId.startsWith("UC")) return browseId;
+  throw new YouTubeError("CHANNEL_UNAVAILABLE", `URL ${ref.url} does not resolve to a channel`, {
+    reason: "resolveURL returned no channel browseId",
+  });
+}
+
+export function fetchChannelPlaylists(channelInput: string, page: number = 1, signal?: AbortSignal): Promise<ChannelPlaylistsPage> {
+  let ref: ChannelRef;
+  ref = parseChannelRef(channelInput);
+  const cacheKey = `${channelInput.trim().toLowerCase()}|${page}`;
+  const cached = channelPlaylistsCache.get(cacheKey);
+  if (cached) return Promise.resolve(cached);
+
+  return runWithDeadline(signal, config.requestTimeoutMs, "list_channel_playlists", async (s) => {
+    const yt = await getClient(s);
+    const channelId = await resolveChannelId(yt, ref);
+
+    let channel: Awaited<ReturnType<typeof yt.getChannel>>;
+    try {
+      channel = await yt.getChannel(channelId);
+    } catch (err) {
+      if (err instanceof YouTubeError) throw err;
+      throw new YouTubeError("CHANNEL_UNAVAILABLE", `Channel ${channelId} not found, may be private, deleted, or unavailable.`, {
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const empty: ChannelPlaylistsPage = { playlists: [], page, hasMore: false, totalFetched: 0 };
+    if (!channel.has_playlists) {
+      channelPlaylistsCache.set(cacheKey, empty, CACHE_TTL.channelPlaylists);
+      return empty;
+    }
+
+    let feed: ChannelFeedLike | undefined;
+    let lockups: LockupLike[];
+    try {
+      feed = (await channel.getTabByName("Playlists")) as unknown as ChannelFeedLike;
+      lockups = lockupsFromMemo(feed, (channel as unknown as { items?: unknown[] }).items ?? []);
+      for (let i = 1; i < page; i++) {
+        feed = await feed.getContinuation();
+        lockups = lockupsFromMemo(feed, []);
+      }
+    } catch (err) {
+      if (err instanceof YouTubeError) throw err;
+      if (page > 1) {
+        // Requested page beyond the available pages: return an empty page, not an error.
+        channelPlaylistsCache.set(cacheKey, empty, CACHE_TTL.channelPlaylists);
+        return empty;
+      }
+      wrapUpstream(err, "Failed to load channel playlists tab");
+    }
+
+    const playlists: ChannelPlaylist[] = [];
+    for (const item of lockups) {
+      const id = typeof item.content_id === "string" ? item.content_id : null;
+      const title = item.metadata?.title?.toString();
+      if (!id || !title || item.content_type === "VIDEO") continue;
+      playlists.push({
+        playlistId: id,
+        title,
+        videoCount: lockupVideoCount(item),
+        url: `https://www.youtube.com/playlist?list=${id}`,
+      });
+    }
+
+    let hasMore = false;
+    if (feed) {
+      try {
+        await feed.getContinuation();
+        hasMore = true;
+      } catch {
+        hasMore = false;
+      }
+    }
+
+    const result: ChannelPlaylistsPage = { playlists, page, hasMore, totalFetched: playlists.length };
+    channelPlaylistsCache.set(cacheKey, result, CACHE_TTL.channelPlaylists);
+    return result;
+  });
+}
+
+export interface PlaylistVideoItem {
+  videoId: string;
+  title: string;
+  url: string;
+  duration: string | null;
+  channelName: string | null;
+}
+
+export interface PlaylistVideosPage {
+  playlistId: string;
+  title: string | null;
+  totalVideos: number | null;
+  videos: PlaylistVideoItem[];
+  page: number;
+  hasMore: boolean;
+  totalFetched: number;
+}
+
+const playlistVideosCache = new TTLCache<PlaylistVideosPage>(CACHE_MAX_ENTRIES.playlistVideos);
+
+export function fetchPlaylistVideos(
+  playlistInput: string,
+  maxResults: number = 25,
+  page: number = 1,
+  signal?: AbortSignal,
+): Promise<PlaylistVideosPage> {
+  const playlistId = parsePlaylistId(playlistInput);
+  const cacheKey = `${playlistId}|${maxResults}|${page}`;
+  const cached = playlistVideosCache.get(cacheKey);
+  if (cached) return Promise.resolve(cached);
+
+  return runWithDeadline(signal, config.requestTimeoutMs, "get_playlist_videos", async (s) => {
+    const yt = await getClient(s);
+
+    let playlist: Awaited<ReturnType<typeof yt.getPlaylist>>;
+    try {
+      playlist = await yt.getPlaylist(playlistId);
+    } catch (err) {
+      if (err instanceof YouTubeError) throw err;
+      throw new YouTubeError("PLAYLIST_UNAVAILABLE", `Playlist ${playlistId} not found, may be private, deleted, or unavailable.`, {
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const info = (playlist as unknown as { info?: { title?: string; total_items?: string } }).info ?? {};
+    const title = typeof info.title === "string" && info.title.length > 0 ? info.title : null;
+    const totalVideos = parseCountText(info.total_items);
+    if (!title) {
+      throw new YouTubeError("PLAYLIST_UNAVAILABLE", `Playlist ${playlistId} not found, may be private, deleted, or unavailable.`);
+    }
+
+    // Walk pages (each getContinuation() yields the next ~100 videos) until we
+    // have one item more than this page needs, so hasMore is exact.
+    const need = page * maxResults + 1;
+    const collected: LockupLike[] = [];
+    let feed: PlaylistFeedLike = playlist as unknown as PlaylistFeedLike;
+    for (;;) {
+      collected.push(...((feed.items ?? []) as LockupLike[]));
+      if (collected.length >= need) break;
+      try {
+        feed = await feed.getContinuation();
+      } catch {
+        break; // no continuation: playlist exhausted
+      }
+    }
+
+    const videos: PlaylistVideoItem[] = [];
+    for (const item of collected) {
+      if (item.content_type !== "VIDEO") continue; // Shorts/podcasts/other lockups
+      const id = typeof item.content_id === "string" ? item.content_id : null;
+      const itemTitle = item.metadata?.title?.toString();
+      if (!id || !itemTitle) continue;
+      const seconds = durationTextToSeconds(lockupDurationText(item));
+      videos.push({
+        videoId: id,
+        title: itemTitle,
+        url: `https://www.youtube.com/watch?v=${id}`,
+        duration: seconds === null ? null : formatDuration(seconds),
+        channelName: lockupChannelName(item),
+      });
+    }
+
+    const slice = videos.slice((page - 1) * maxResults, page * maxResults);
+    const result: PlaylistVideosPage = {
+      playlistId,
+      title,
+      totalVideos,
+      videos: slice,
+      page,
+      hasMore: videos.length > page * maxResults,
+      totalFetched: slice.length,
+    };
+    playlistVideosCache.set(cacheKey, result, CACHE_TTL.playlistVideos);
+    return result;
+  });
+}
+
+export interface DownloadInfo {
+  videoId: string;
+  title: string | null;
+  url: string;
+  mimeType: string | null;
+  fileSize: number | null;
+  qualityLabel: string | null;
+}
+
+const downloadUrlCache = new TTLCache<DownloadInfo>(CACHE_MAX_ENTRIES.downloadUrls);
+
+export function fetchVideoDownloadUrl(
+  videoId: string,
+  quality: string = "best",
+  format: string = "mp4",
+  signal?: AbortSignal,
+): Promise<DownloadInfo> {
+  const cacheKey = `${videoId}|${quality}|${format}`;
+  const cached = downloadUrlCache.get(cacheKey);
+  if (cached) return Promise.resolve(cached);
+
+  return runWithDeadline(signal, config.requestTimeoutMs, "get_video_download_url", async (s) => {
+    const yt = await getClient(s);
+
+    // Title from the cheapest source: metadata cache, else a WEB basic-info call.
+    let title: string | null = videoInfoCache.get(videoId)?.title ?? null;
+    if (title === null) {
+      try {
+        const basic = await yt.getBasicInfo(videoId);
+        title = basic.basic_info?.title ?? null;
+      } catch {
+        title = null; // title is best-effort; the URL is the product
+      }
+    }
+
+    // Direct download links only exist as muxed formats on the ANDROID client;
+    // the WEB/IOS clients serve PO-token-gated adaptive URLs that 403 on fetch.
+    let result: DownloadInfo;
+    try {
+      const f = await yt.getStreamingData(videoId, {
+        client: "ANDROID",
+        quality,
+        format,
+        type: "video+audio",
+      });
+      const url = (f as unknown as { url?: string }).url ?? "";
+      if (!url) {
+        throw new YouTubeError("DOWNLOAD_UNAVAILABLE", `YouTube returned no deciphered URL for video ${videoId}`);
+      }
+      const fmt = f as unknown as {
+        mime_type?: string;
+        content_length?: number;
+        quality_label?: string;
+      };
+      result = {
+        videoId,
+        title,
+        url,
+        mimeType: fmt.mime_type ?? null,
+        fileSize: typeof fmt.content_length === "number" ? fmt.content_length : null,
+        qualityLabel: fmt.quality_label ?? null,
+      };
+    } catch (err) {
+      if (err instanceof YouTubeError) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/No matching formats/i.test(msg)) {
+        throw new YouTubeError(
+          "DOWNLOAD_UNAVAILABLE",
+          `No direct (single-file) URL for quality "${quality}" + format "${format}". YouTube only serves muxed direct links at 360p for most videos; use quality "best" with format "mp4". Higher resolutions are adaptive-only and need client-side merging, which this server does not do.`,
+        );
+      }
+      wrapUpstream(err, "Failed to get streaming data");
+    }
+
+    downloadUrlCache.set(cacheKey, result, CACHE_TTL.downloadUrls);
+    return result;
+  });
 }

@@ -13,6 +13,7 @@ export const getVideoInfoSchema = z.object({
 
 export const getVideoInfoOutputSchema = {
   videoId: z.string(),
+  url: z.string().describe("https://www.youtube.com/watch?v=<id>"),
   title: z.string(),
   description: z.string().nullable().describe("null when YouTube did not provide a description; empty string when it is empty"),
   channelName: z.string().nullable(),
@@ -46,6 +47,7 @@ export async function getVideoInfo(
 
     const text = [
       `📹 ${info.title}`,
+      `URL: ${info.url}`,
       ``,
       `Channel: ${info.channelName ?? "unknown"}`,
       `Uploaded: ${info.uploadedAt ?? "unknown"}`,

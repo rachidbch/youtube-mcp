@@ -31,6 +31,21 @@ import {
   getTranscriptLanguagesOutputSchema,
   getTranscriptLanguagesSchema,
 } from "./tools/get-transcript-languages.js";
+import {
+  getVideoDownloadUrl,
+  getVideoDownloadUrlOutputSchema,
+  getVideoDownloadUrlSchema,
+} from "./tools/get-video-download-url.js";
+import {
+  getPlaylistVideos,
+  getPlaylistVideosOutputSchema,
+  getPlaylistVideosSchema,
+} from "./tools/get-playlist-videos.js";
+import {
+  listChannelPlaylists,
+  listChannelPlaylistsOutputSchema,
+  listChannelPlaylistsSchema,
+} from "./tools/list-channel-playlists.js";
 import { closeClient } from "./utils/youtube-api.js";
 import { abortAll } from "./utils/abort.js";
 import { logger, withLogging } from "./utils/logger.js";
@@ -82,6 +97,27 @@ function createServer(): McpServer {
     inputSchema: getTranscriptLanguagesSchema.shape,
     outputSchema: getTranscriptLanguagesOutputSchema,
   }, withLogging("get_transcript_languages", getTranscriptLanguages));
+
+  server.registerTool("get_video_download_url", {
+    description:
+      "Get a signed DIRECT download URL (video+audio in one file) for a YouTube video. Consumers fetch the URL themselves (curl/wget); the server does not proxy or store files. URL expires in ~6 hours. Input: video URL or ID; optional quality ('best' recommended, 'bestefficiency', or '360p'/'720p'...) and format ('mp4'|'webm'|'any'). NOTE: direct links are muxed, so 'best' is typically 360p; higher resolutions are adaptive-only and need client-side merging. Chain: get the video from search_youtube, get_video_info, or get_playlist_videos.",
+    inputSchema: getVideoDownloadUrlSchema.shape,
+    outputSchema: getVideoDownloadUrlOutputSchema,
+  }, withLogging("get_video_download_url", getVideoDownloadUrl));
+
+  server.registerTool("list_channel_playlists", {
+    description:
+      "List a channel's playlists (~30 per page, paginated with page + hasMore). Input: channel URL (youtube.com/@handle, /c/name, /user/name, /channel/UC...), bare @handle, or UC... channel ID. Returns per playlist: playlistId, title, videoCount (null when not shown), url. Chain: use get_playlist_videos with a returned playlistId to list its videos, then get_video_info / get_video_transcript / get_video_comments / get_video_download_url per video.",
+    inputSchema: listChannelPlaylistsSchema.shape,
+    outputSchema: listChannelPlaylistsOutputSchema,
+  }, withLogging("list_channel_playlists", listChannelPlaylists));
+
+  server.registerTool("get_playlist_videos", {
+    description:
+      "List the videos of a YouTube playlist in order, paginated (maxResults per page, default 25; use page + hasMore). Shorts and non-video entries are filtered out. Input: playlist URL (must contain list=...) or playlist ID (PL..., OL..., RD...). Returns playlist title/totalVideos plus per video: videoId, title, url, duration, channelName. Chain: get a playlistId from list_channel_playlists or search_youtube; then use get_video_info / get_video_transcript / get_video_comments / get_video_download_url on any returned video.",
+    inputSchema: getPlaylistVideosSchema.shape,
+    outputSchema: getPlaylistVideosOutputSchema,
+  }, withLogging("get_playlist_videos", getPlaylistVideos));
 
   return server;
 }
