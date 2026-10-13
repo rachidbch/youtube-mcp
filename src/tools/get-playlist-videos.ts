@@ -27,7 +27,7 @@ export const getPlaylistVideosSchema = z.object({
 export const getPlaylistVideosOutputSchema = {
   playlistId: z.string(),
   title: z.string().nullable(),
-  totalVideos: z.number().int().nullable(),
+  totalVideos: z.number().int().nullable().describe("YouTube's declared total; can exceed the videos actually listable, because deleted/private/blocked entries stay in the count but are never served"),
   videos: z.array(z.object({
     videoId: z.string(),
     title: z.string(),
