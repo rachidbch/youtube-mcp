@@ -120,10 +120,13 @@ try {
   const tools = await client.listTools();
   const names = tools.tools.map((tool) => tool.name).sort();
   const expected = [
+    "get_playlist_videos",
     "get_transcript_languages",
     "get_video_comments",
+    "get_video_download_url",
     "get_video_info",
     "get_video_transcript",
+    "list_channel_playlists",
     "search_youtube",
   ].sort();
 

@@ -57,7 +57,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.1",
     "youtube-transcript-plus": "^2.0.0",
-    "youtubei.js": "18.1.0",
+    "youtubei.js": "^18.1.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
