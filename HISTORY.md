@@ -1,5 +1,12 @@
 # youtube-mcp — project timeline (rachidbch fork)
 
+## 2026-10-14 - Docs pass: AGENTS.md + ADR.md created, README fork section current
+
+- AGENTS.md: project identity, ubiquitous language, agent loop, territory
+  map, gates. ADR.md: ADR-001..005 (mission, merge+session-fix, robustness
+  rule/youtubei.js, auth architecture, version policy). README fork section
+  now lists all tools + both install shapes. Spec marked implemented.
+
 ## 2026-10-14 - Home feed + notifications on InnerTube (never-crash rule)
 
 - No official API exists -> fragile surface accepted, wrapped robust:

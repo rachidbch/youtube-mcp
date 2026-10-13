@@ -467,16 +467,29 @@ This server uses YouTube's InnerTube API (the same API used by youtube.com). The
 
 [ISC](LICENSE). This project is unofficial and is not affiliated with YouTube or Google.
 
-## Fork: anonymous vs authenticated mode (rachidbch)
+## Fork: tools, modes, and auth (rachidbch)
 
-This fork supports two install shapes, chosen by environment variables, plus a
-runtime auth state machine an agent can drive itself.
+This fork adds, on top of upstream's 5 tools:
 
-**Anonymous install (default).** No `YT_GOOGLE_*` variables. The server exposes
-8 public tools (video metadata, transcripts, comments, search, channel
-playlists, playlist videos, download URLs) plus 4 auth tools
-(`get_auth_status`, `start_auth`, `complete_auth`, `reset_auth`). It reaches
-YouTube the way a logged-out visitor does: public information only.
+- `list_channel_playlists`, `get_playlist_videos` — the channel -> playlist ->
+  video chain; Shorts/non-video entries filtered; pagination via
+  `page`/`hasMore`/`totalFetched`.
+- `get_video_download_url` — signed muxed direct link (typically 360p;
+  higher resolutions are adaptive-only and need client-side merging); ~6h
+  expiry, 10-minute server cache.
+- `get_video_info` now also returns `url`.
+- `get_auth_status` / `start_auth` / `complete_auth` / `reset_auth` — the
+  Google-account auth state machine (below).
+- `start_feed_auth` / `get_my_feed` / `get_my_notifications` — personalized
+  home feed and bell via a one-time InnerTube device-code sign-in (below).
+- `list_my_playlists` / `get_my_playlist_videos` — your playlists, any
+  privacy, plus Liked and Uploads (needs account auth).
+
+Install shapes by env: anonymous = 15 tools; client-configured
+(YT_GOOGLE_CLIENT_ID/SECRET) = 17. Invalid combinations fail fast at startup.
+
+**Anonymous install (default).** No `YT_GOOGLE_*` variables: all public tools
+plus the auth tools; YouTube is reached the way a logged-out visitor sees it.
 
 **Client-configured install.** Set the OAuth client (the refresh token is now
 optional - it can be obtained at runtime):
@@ -491,6 +504,15 @@ The two account tools (`list_my_playlists`, `get_my_playlist_videos`) are then
 registered; until consent completes they answer with actionable guidance.
 Invalid combinations (client without secret, token without client) are
 rejected at startup.
+
+### Feed and notifications (fragile surface, wrapped)
+
+No official API exists for home recommendations or notifications, so these
+ride the InnerTube surface behind a one-time device-code sign-in:
+`start_feed_auth` returns a URL + code, the account owner enters it on any
+device, progress shows in `get_auth_status.feedAuth`. Parsing is defensive by
+mandate: unrecognized layouts degrade to empty results with notes — never a
+crash. `reset_auth` clears this session too.
 
 ### The auth state machine (agent-facing)
 
