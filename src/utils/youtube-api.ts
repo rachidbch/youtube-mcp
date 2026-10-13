@@ -608,12 +608,14 @@ function transcriptConfig(ctx: CallContext, lang?: string, { manualFirst = false
       const tracklist = json.captions?.playerCaptionsTracklistRenderer;
       let responseBody = body;
       if (manualFirst && tracklist?.captionTracks) {
-        // The library takes the first track when no language is requested; put manual
-        // tracks (no kind=asr) first, keeping YouTube's order otherwise.
-        tracklist.captionTracks = [
-          ...tracklist.captionTracks.filter((t) => t.kind !== "asr"),
-          ...tracklist.captionTracks.filter((t) => t.kind === "asr"),
-        ];
+        // The library takes the first track when no language is requested; rank tracks
+        // so the default pick is sensible: preferred languages (config) first, manual
+        // before auto within each group. A preferred-language auto track outranks a
+        // non-preferred manual one (English auto beats French manual for an English consumer).
+        const prefs = new Set(config.defaultTranscriptLangs);
+        const rank = (t: { languageCode?: string; kind?: string }) =>
+          (prefs.has((t.languageCode ?? "").toLowerCase()) ? 0 : 1) * 2 + (t.kind === "asr" ? 1 : 0);
+        tracklist.captionTracks = [...tracklist.captionTracks].sort((a, b) => rank(a) - rank(b));
         responseBody = JSON.stringify(json);
       }
       ctx.captionTracks = (tracklist?.captionTracks ?? []).map((t) => ({

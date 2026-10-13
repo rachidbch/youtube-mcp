@@ -10,7 +10,16 @@ test("defaults apply when env is empty", () => {
     transcriptMaxBytes: 5000000,
     transcriptMaxSegments: 50000,
     transcriptPageMaxSegments: 500,
+    defaultTranscriptLangs: ["en"],
   });
+});
+
+test("YT_DEFAULT_LANGS is parsed and validated", () => {
+  assert.deepEqual(loadConfig({ YT_DEFAULT_LANGS: "en, pt-BR " }).defaultTranscriptLangs, ["en", "pt-br"]);
+  for (const bad of ["", "   ", "1n", "english", "en_US"] ) {
+    if (bad.trim() === "") continue; // empty falls back to the default
+    assert.throws(() => loadConfig({ YT_DEFAULT_LANGS: bad }), /Invalid YT_DEFAULT_LANGS/, bad);
+  }
 });
 
 test("env overrides are parsed", () => {
