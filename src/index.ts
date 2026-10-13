@@ -32,18 +32,25 @@ import {
   getTranscriptLanguagesSchema,
 } from "./tools/get-transcript-languages.js";
 import { closeClient } from "./utils/youtube-api.js";
+import { abortAll } from "./utils/abort.js";
 import { logger, withLogging } from "./utils/logger.js";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+
+/** Version reported to MCP clients; package.json is one level above dist/. */
+const packageVersion = (
+  JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }
+).version;
 
 function createServer(): McpServer {
   const server = new McpServer({
     name: "youtube-mcp",
-    version: "1.0.0",
+    version: packageVersion,
   });
 
   server.registerTool("get_video_info", {
     description:
-      "Get YouTube video metadata: title, views, likes, comment count, upload date, duration, tags, and description. Input: YouTube URL or video ID. Returns error message if video is private, deleted, or unavailable.",
+      "Get YouTube video metadata: title, channel, description, duration (text and seconds), views, likes, comment count, upload date, and tags. Unknown values are null. Input: YouTube URL or video ID. Errors carry a code (e.g. ACCESS_BLOCKED, VIDEO_UNAVAILABLE, TIMEOUT) in _meta[\"youtube-mcp/error\"] and as a [CODE] text prefix.",
     inputSchema: getVideoInfoSchema.shape,
     outputSchema: getVideoInfoOutputSchema,
   }, withLogging("get_video_info", getVideoInfo));
@@ -57,7 +64,7 @@ function createServer(): McpServer {
 
   server.registerTool("get_video_transcript", {
     description:
-      "Get YouTube video transcript/captions (manual or auto-generated) with timestamps. Use 'lang' to specify language code (e.g. 'en', 'id'). Returns both timestamped and plain text versions. Returns error if captions are unavailable.",
+      "Get YouTube video transcript/captions (manual or auto-generated) with timestamps. Use 'lang' to pick a language code (e.g. 'en', 'id'), or omit it to get the first manual track (else the first auto-generated one); get_transcript_languages lists the codes. Returns both timestamped and plain text versions, paginated with startSegment/nextStartSegment. available=false with reason NO_CAPTIONS or LANGUAGE_UNAVAILABLE when captions are absent; access problems (ACCESS_BLOCKED etc.) are errors.",
     inputSchema: getVideoTranscriptSchema.shape,
     outputSchema: getVideoTranscriptOutputSchema,
   }, withLogging("get_video_transcript", getVideoTranscript));
@@ -80,10 +87,29 @@ function createServer(): McpServer {
 }
 
 async function startStdio() {
+  // stdout carries MCP messages only. Route any dependency's console output to stderr.
+  console.log = console.info = console.debug = (...args: unknown[]) => console.error(...args);
+
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   logger.info("YouTube MCP server running on stdio");
+
+  // The client closing stdin (or a signal) ends the session: abort in-flight
+  // upstream work, close the transport, and exit.
+  let shuttingDown = false;
+  const shutdown = (why: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info("Shutting down", { reason: why });
+    abortAll();
+    closeClient();
+    server.close().catch(() => {}).finally(() => process.exit(0));
+  };
+  process.stdin.on("end", () => shutdown("stdin closed"));
+  process.stdin.on("close", () => shutdown("stdin closed"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 function startHttp() {
@@ -166,6 +192,7 @@ function startHttp() {
 
     const shutdown = () => {
       logger.info("Shutting down...");
+      abortAll();
       closeClient();
       httpServer.close(() => process.exit(0));
     };

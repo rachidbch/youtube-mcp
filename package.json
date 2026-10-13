@@ -1,29 +1,63 @@
 {
-  "name": "youtube-mcp",
-  "version": "1.0.0",
+  "name": "@granitebps/youtube-mcp",
+  "version": "1.0.1",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "youtube-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "server.json"
+  ],
+  "mcpName": "io.github.granitebps/youtube-mcp",
   "scripts": {
-    "build": "tsc",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc",
+    "test": "npm run build && node --test \"test/**/*.test.mjs\"",
     "start": "node dist/index.js",
     "start:http": "node dist/index.js --http",
-    "dev": "tsc && node dist/index.js",
-    "dev:http": "tsc && node dist/index.js --http"
+    "dev": "npm run build && node dist/index.js",
+    "dev:http": "npm run build && node dist/index.js --http",
+    "check:package": "node scripts/check-package.mjs",
+    "check:install": "node scripts/check-install.mjs",
+    "check:release": "node scripts/check-release.mjs && node scripts/check-workflows.mjs",
+    "check": "npm test && npm run check:release && npm run check:package && npm run check:install",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "keywords": [
     "mcp",
     "youtube",
-    "transcript"
+    "transcript",
+    "captions",
+    "model-context-protocol",
+    "stdio"
   ],
-  "author": "",
+  "author": "granitebps",
   "license": "ISC",
-  "description": "MCP server for fetching YouTube video data, comments, and transcripts",
+  "description": "Read YouTube video metadata, transcripts, comments, and search results through MCP.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/granitebps/youtube-mcp.git"
+  },
+  "homepage": "https://github.com/granitebps/youtube-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/granitebps/youtube-mcp/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "express": "^5.2.1",
-    "express-rate-limit": "^8.3.2",
+    "express-rate-limit": "^8.7.1",
     "youtube-transcript-plus": "^2.0.0",
-    "youtubei.js": "^17.0.1",
+    "youtubei.js": "18.1.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

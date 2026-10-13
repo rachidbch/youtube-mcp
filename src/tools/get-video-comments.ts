@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { errorResult, YouTubeError } from "../utils/errors.js";
 import { parseVideoId } from "../utils/parse-video-id.js";
 import { fetchComments } from "../utils/youtube-api.js";
 
@@ -54,22 +55,22 @@ export const getVideoCommentsOutputSchema = {
 };
 
 export async function getVideoComments(
-  args: z.infer<typeof getVideoCommentsSchema>
+  args: z.infer<typeof getVideoCommentsSchema>,
+  extra?: { signal?: AbortSignal }
 ) {
   let videoId: string;
   try {
     videoId = parseVideoId(args.video);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { content: [{ type: "text" as const, text: `❌ Invalid video: ${msg}` }], isError: true };
+    return errorResult(new YouTubeError("INVALID_INPUT", `Invalid video: ${msg}`));
   }
 
   let result: Awaited<ReturnType<typeof fetchComments>>;
   try {
-    result = await fetchComments(videoId, args.maxResults, args.sortBy, args.page);
+    result = await fetchComments(videoId, args.maxResults, args.sortBy, args.page, extra?.signal);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { content: [{ type: "text" as const, text: `❌ ${msg}` }], isError: true };
+    return errorResult(err);
   }
 
   if (result.threads.length === 0) {

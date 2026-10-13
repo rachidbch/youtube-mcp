@@ -13,15 +13,20 @@ export const logger = {
 };
 
 /** Wraps a tool handler to log invocation, duration, and errors */
-export function withLogging<T extends Record<string, unknown>, R>(
+export function withLogging<T extends Record<string, unknown>, E, R>(
   toolName: string,
-  handler: (args: T) => Promise<R>
-): (args: T) => Promise<R> {
-  return async (args: T): Promise<R> => {
+  handler: (args: T, extra: E) => Promise<R>
+): (args: T, extra: E) => Promise<R> {
+  return async (args: T, extra: E): Promise<R> => {
     const start = Date.now();
     try {
-      const result = await handler(args);
-      logger.info(`Tool: ${toolName}`, { durationMs: Date.now() - start });
+      const result = await handler(args, extra);
+      const error = errorOf(result);
+      if (error) {
+        logger.warn(`Tool: ${toolName} returned error`, { durationMs: Date.now() - start, ...error });
+      } else {
+        logger.info(`Tool: ${toolName}`, { durationMs: Date.now() - start });
+      }
       return result;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -29,4 +34,10 @@ export function withLogging<T extends Record<string, unknown>, R>(
       throw err;
     }
   };
+}
+
+function errorOf(result: unknown): Record<string, unknown> | undefined {
+  const r = result as { isError?: boolean; _meta?: Record<string, Record<string, unknown>> } | undefined;
+  if (!r?.isError) return undefined;
+  return r._meta?.["youtube-mcp/error"] ?? { error: "isError" };
 }

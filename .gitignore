@@ -3,3 +3,5 @@ dist/
 .env
 *.js.map
 *.d.ts
+*.tgz
+.DS_Store

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { errorResult } from "../utils/errors.js";
 import { searchVideos } from "../utils/youtube-api.js";
 
 export const searchYoutubeSchema = z.object({
@@ -17,13 +18,13 @@ export const searchYoutubeSchema = z.object({
     .enum(["relevance", "date", "viewCount", "rating"])
     .default("relevance")
     .describe(
-      "Sort order: 'relevance' (default), 'date' (newest), 'viewCount' (most popular), 'rating' (highest rated)"
+      "Sort order: 'relevance' (default) or 'viewCount' (most popular). YouTube search cannot sort by 'date' (results stay in relevance order) or 'rating' (sorted by popularity instead); both return a warning."
     ),
   uploadDate: z
     .enum(["any", "hour", "today", "week", "month", "year"])
     .default("any")
     .describe(
-      "Filter by upload date: 'any', 'hour', 'today', 'week', 'month', 'year'"
+      "Filter by upload date: 'any', 'today', 'week', 'month', 'year'. 'hour' is not available on YouTube and is applied as 'today' with a warning."
     ),
   videoDuration: z
     .enum(["any", "short", "medium", "long"])
@@ -51,24 +52,32 @@ export const searchYoutubeOutputSchema = {
   uploadDate: z.enum(["any", "hour", "today", "week", "month", "year"]),
   videoDuration: z.enum(["any", "short", "medium", "long"]),
   results: z.array(searchResultSchema),
+  warnings: z
+    .array(z.object({ code: z.string(), message: z.string() }))
+    .optional()
+    .describe("Requested options that YouTube search could not apply exactly"),
 };
 
 export async function searchYoutube(
-  args: z.infer<typeof searchYoutubeSchema>
+  args: z.infer<typeof searchYoutubeSchema>,
+  extra?: { signal?: AbortSignal }
 ) {
-  let results: Awaited<ReturnType<typeof searchVideos>>;
+  let page: Awaited<ReturnType<typeof searchVideos>>;
   try {
-    results = await searchVideos({
+    page = await searchVideos({
       query: args.query,
       maxResults: args.maxResults,
       sortBy: args.sortBy,
       uploadDate: args.uploadDate,
       videoDuration: args.videoDuration,
-    });
+    }, extra?.signal);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { content: [{ type: "text" as const, text: `❌ ${msg}` }], isError: true };
+    return errorResult(err);
   }
+
+  const { results, warnings } = page;
+  const warningFields = warnings.length > 0 ? { warnings } : {};
+  const warningLines = warnings.map((w) => `⚠️ ${w.message}`);
 
   if (results.length === 0) {
     const structuredContent = {
@@ -78,11 +87,12 @@ export async function searchYoutube(
       uploadDate: args.uploadDate,
       videoDuration: args.videoDuration,
       results: [],
+      ...warningFields,
     };
 
     return {
       content: [
-        { type: "text" as const, text: "No results found for this search." },
+        { type: "text" as const, text: ["No results found for this search.", ...warningLines].join("\n") },
       ],
       structuredContent,
     };
@@ -90,6 +100,7 @@ export async function searchYoutube(
 
   const lines: string[] = [
     `🔍 Found ${results.length} result(s) for "${args.query}":\n`,
+    ...warningLines.map((l) => `${l}\n`),
   ];
 
   for (const [i, r] of results.entries()) {
@@ -119,6 +130,7 @@ export async function searchYoutube(
       uploadDate: args.uploadDate,
       videoDuration: args.videoDuration,
       results,
+      ...warningFields,
     },
   };
 }
