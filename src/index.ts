@@ -118,6 +118,9 @@ function startHttp() {
   const apiToken = process.env.API_TOKEN;
 
   const app = createMcpExpressApp({ host });
+  // Tailscale Funnel fronts this endpoint and adds X-Forwarded-For; without
+  // trust proxy, express-rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
+  app.set("trust proxy", 1);
 
   // Optional bearer token authentication
   if (apiToken) {
