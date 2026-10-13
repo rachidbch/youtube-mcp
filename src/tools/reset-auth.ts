@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { errorResult, YouTubeError } from "../utils/errors.js";
 import { resetAuth } from "../utils/google-account.js";
+import { clearFeedAuth } from "../utils/youtube-feed.js";
 
 export const resetAuthSchema = z.object({
   confirm: z
@@ -31,8 +32,9 @@ export async function resetAuthTool(args: z.infer<typeof resetAuthSchema>, extra
     );
   }
   try {
+    await clearFeedAuth(); // feed/notifications session is dropped too (best-effort)
     const status = await resetAuth(args.revoke, extra?.signal);
-    const text = [`🔐 Auth reset. ${status.instructions}`].join("\n");
+    const text = [`🔐 Auth reset (Google account + feed/notifications session). ${status.instructions}`].join("\n");
     const structuredContent = {
       state: status.state,
       nextAction: status.nextAction,

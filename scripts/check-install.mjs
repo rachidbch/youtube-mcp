@@ -129,7 +129,10 @@ try {
     "list_channel_playlists",
     "search_youtube",
     "get_auth_status",
+    "get_my_feed",
+    "get_my_notifications",
     "start_auth",
+    "start_feed_auth",
     "complete_auth",
     "reset_auth",
   ].sort();

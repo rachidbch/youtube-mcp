@@ -62,6 +62,9 @@ import { getAuthStatusTool, getAuthStatusOutputSchema } from "./tools/get-auth-s
 import { startAuthTool, startAuthOutputSchema } from "./tools/start-auth.js";
 import { completeAuthTool, completeAuthSchema, completeAuthOutputSchema } from "./tools/complete-auth.js";
 import { resetAuthTool, resetAuthSchema, resetAuthOutputSchema } from "./tools/reset-auth.js";
+import { startFeedAuthTool, startFeedAuthOutputSchema } from "./tools/start-feed-auth.js";
+import { getMyFeedTool, getMyFeedSchema, getMyFeedOutputSchema } from "./tools/get-my-feed.js";
+import { getMyNotificationsTool, getMyNotificationsOutputSchema } from "./tools/get-my-notifications.js";
 import { abortAll } from "./utils/abort.js";
 import { logger, withLogging } from "./utils/logger.js";
 import { randomUUID } from "node:crypto";
@@ -163,6 +166,30 @@ function createServer(): McpServer {
     inputSchema: resetAuthSchema.shape,
     outputSchema: resetAuthOutputSchema,
   }, withLogging("reset_auth", resetAuthTool));
+
+  // Personalized home feed + notifications: no official API exists, so these ride
+  // the InnerTube surface behind a one-time device-code sign-in, defensively
+  // parsed (degrade to empty + note, never crash). Auth state: get_auth_status.feedAuth.
+  server.registerTool("start_feed_auth", {
+    description:
+      "One-time YouTube sign-in for personalized home feed and notifications (device-code login, like a smart TV; separate from the Google-account playlists auth). Returns a verification URL and a code: the account owner opens the URL on any device, signs in, enters the code. Progress shows in get_auth_status.feedAuth; once signed_in, get_my_feed and get_my_notifications work.",
+    inputSchema: {},
+    outputSchema: startFeedAuthOutputSchema,
+  }, withLogging("start_feed_auth", startFeedAuthTool));
+
+  server.registerTool("get_my_feed", {
+    description:
+      "Your personalized YouTube home-page recommendations (what YouTube recommends to the signed-in account). Requires the one-time start_feed_auth. Returns videoId/title/url/channelName up to maxResults. Note: this uses YouTube's internal API (no official one exists); on unrecognized layouts it degrades to an empty list with a note rather than erroring.",
+    inputSchema: getMyFeedSchema.shape,
+    outputSchema: getMyFeedOutputSchema,
+  }, withLogging("get_my_feed", getMyFeedTool));
+
+  server.registerTool("get_my_notifications", {
+    description:
+      "Your YouTube bell notifications for the signed-in account. Requires the one-time start_feed_auth. Returns title/sentText/read/videoUrl/channelName. Note: internal API (no official one exists); degrades to an empty list with a note on unrecognized layouts.",
+    inputSchema: {},
+    outputSchema: getMyNotificationsOutputSchema,
+  }, withLogging("get_my_notifications", getMyNotificationsTool));
 
   // Account tools: registered whenever an OAuth client exists; each call checks
   // the live token state and returns actionable guidance when unauthenticated.
