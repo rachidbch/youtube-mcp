@@ -15,8 +15,10 @@ export interface Config {
   transcriptPageMaxSegments: number;
   /** Preferred caption languages, best match first, when a call omits `lang` (e.g. ["en", "en-US"]). */
   defaultTranscriptLangs: string[];
-  /** Google OAuth credentials for account-scoped tools ("my playlists"). null = anonymous mode. */
-  accountAuth: { clientId: string; clientSecret: string; refreshToken: string } | null;
+  /** Google OAuth client for account tools. null = anonymous install. */
+  googleClient: { clientId: string; clientSecret: string } | null;
+  /** Refresh token provided at install time (optional; tokens can also be acquired at runtime via the auth tools). */
+  googleRefreshTokenEnv: string | null;
 }
 
 const DEFAULTS: Config = {
@@ -26,10 +28,11 @@ const DEFAULTS: Config = {
   transcriptMaxSegments: 50_000,
   transcriptPageMaxSegments: 500,
   defaultTranscriptLangs: ["en"],
-  accountAuth: null,
+  googleClient: null,
+  googleRefreshTokenEnv: null,
 };
 
-const ENV_KEYS: Omit<Record<keyof Config, string>, "accountAuth"> = {
+const ENV_KEYS: Omit<Record<keyof Config, string>, "googleClient" | "googleRefreshTokenEnv"> = {
   initTimeoutMs: "YT_INIT_TIMEOUT_MS",
   requestTimeoutMs: "YT_REQUEST_TIMEOUT_MS",
   transcriptMaxBytes: "YT_TRANSCRIPT_MAX_BYTES",
@@ -42,7 +45,7 @@ const ACCOUNT_ENV_KEYS = ["YT_GOOGLE_CLIENT_ID", "YT_GOOGLE_CLIENT_SECRET", "YT_
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const config = { ...DEFAULTS };
-  for (const key of Object.keys(ENV_KEYS) as (keyof Omit<Config, "accountAuth">)[]) {
+  for (const key of Object.keys(ENV_KEYS) as Array<keyof typeof ENV_KEYS>) {
     if (key === "defaultTranscriptLangs") continue; // parsed separately below
     const name = ENV_KEYS[key];
     const raw = env[name];
@@ -63,19 +66,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     }
   }
   {
-    const present = ACCOUNT_ENV_KEYS.filter((k) => env[k] !== undefined && env[k]!.trim() !== "");
-    if (present.length > 0 && present.length < ACCOUNT_ENV_KEYS.length) {
+    const id = env.YT_GOOGLE_CLIENT_ID?.trim();
+    const secret = env.YT_GOOGLE_CLIENT_SECRET?.trim();
+    const refreshToken = env.YT_GOOGLE_REFRESH_TOKEN?.trim();
+    if (id && !secret) {
+      throw new Error("Invalid account auth configuration: YT_GOOGLE_CLIENT_ID is set but YT_GOOGLE_CLIENT_SECRET is missing.");
+    }
+    if (secret && !id) {
+      throw new Error("Invalid account auth configuration: YT_GOOGLE_CLIENT_SECRET is set but YT_GOOGLE_CLIENT_ID is missing.");
+    }
+    if (refreshToken && !(id && secret)) {
       throw new Error(
-        `Invalid account auth configuration: ${present.join(", ")} set but ${ACCOUNT_ENV_KEYS.filter((k) => !present.includes(k)).join(", ")} missing. ` +
-          `Set all three (authenticated mode) or none (anonymous mode). See scripts/google-oauth-login.mjs to obtain a refresh token.`,
+        "Invalid account auth configuration: YT_GOOGLE_REFRESH_TOKEN is set but the OAuth client (YT_GOOGLE_CLIENT_ID/SECRET) is missing. " +
+          "Set the client too, or drop the token and use the auth tools (start_auth) instead.",
       );
     }
-    if (present.length === ACCOUNT_ENV_KEYS.length) {
-      config.accountAuth = {
-        clientId: env.YT_GOOGLE_CLIENT_ID!.trim(),
-        clientSecret: env.YT_GOOGLE_CLIENT_SECRET!.trim(),
-        refreshToken: env.YT_GOOGLE_REFRESH_TOKEN!.trim(),
-      };
+    if (id && secret) {
+      config.googleClient = { clientId: id, clientSecret: secret };
+      config.googleRefreshTokenEnv = refreshToken || null;
     }
   }
   return config;

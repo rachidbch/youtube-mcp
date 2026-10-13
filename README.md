@@ -469,41 +469,54 @@ This server uses YouTube's InnerTube API (the same API used by youtube.com). The
 
 ## Fork: anonymous vs authenticated mode (rachidbch)
 
-This fork supports two install modes, chosen at install time by environment
-variables. A restart is enough to switch; nothing else changes.
+This fork supports two install shapes, chosen by environment variables, plus a
+runtime auth state machine an agent can drive itself.
 
-**Anonymous mode (default).** Set none of the `YT_GOOGLE_*` variables. The
-server exposes the 8 public tools (video metadata, transcripts, comments,
-search, channel playlists, playlist videos, download URLs). It reaches
-YouTube the way a logged-out visitor does, so it can only ever see public
-information.
+**Anonymous install (default).** No `YT_GOOGLE_*` variables. The server exposes
+8 public tools (video metadata, transcripts, comments, search, channel
+playlists, playlist videos, download URLs) plus 4 auth tools
+(`get_auth_status`, `start_auth`, `complete_auth`, `reset_auth`). It reaches
+YouTube the way a logged-out visitor does: public information only.
 
-**Authenticated mode.** Set all three:
+**Client-configured install.** Set the OAuth client (the refresh token is now
+optional - it can be obtained at runtime):
 
 ```
-YT_GOOGLE_CLIENT_ID=...
+YT_GOOGLE_CLIENT_ID=...      # Google Cloud OAuth client ("Desktop app" type)
 YT_GOOGLE_CLIENT_SECRET=...
-YT_GOOGLE_REFRESH_TOKEN=...
+# YT_GOOGLE_REFRESH_TOKEN=...  # optional install-time token; otherwise use the auth tools
 ```
 
-The server additionally exposes `list_my_playlists` and
-`get_my_playlist_videos`, backed by Google's official YouTube Data API v3
-with your consent: every playlist you see on your account (public, unlisted,
-private), plus your Liked videos and channel uploads. Partial configuration
-is rejected at startup rather than starting half-working.
+The two account tools (`list_my_playlists`, `get_my_playlist_videos`) are then
+registered; until consent completes they answer with actionable guidance.
+Invalid combinations (client without secret, token without client) are
+rejected at startup.
 
-One-time setup for the refresh token (about 10 minutes, once, then it is
-permanent unless you revoke it):
+### The auth state machine (agent-facing)
 
-1. In [Google Cloud Console](https://console.cloud.google.com/): create a
-   project, enable **YouTube Data API v3**, configure the OAuth consent
-   screen (External + add yourself as test user), and create an OAuth client
-   of type **Desktop app**.
-2. On any machine with a browser, run:
-   `YT_GOOGLE_CLIENT_ID=... YT_GOOGLE_CLIENT_SECRET=... node scripts/google-oauth-login.mjs`
-3. Click Allow in the opened page; the script prints the three lines to add
-   to your unit file or `.env`. Restart the server.
+`get_auth_status` always tells the truth, including a live token check:
 
-Scope granted: `youtube.readonly` (read-only). Watch Later is **not**
-available in this mode: Google's API does not expose the WL playlist to any
-client. That is a Google-side limitation, not a server defect.
+- `not_configured` - no OAuth client; instructions explain how to install one
+- `not_authenticated` - client ready; next: `start_auth`
+- `consent_pending` - consent URL issued (15 min); next: `complete_auth`
+- `authenticated` - works; shows the account's channel name
+- `expired` - token revoked/expired; next: `start_auth` (roll)
+
+Flow without any browser on the server: an agent calls `start_auth`, gets a
+consentUrl, brings the account owner there (or opens it in a browser it
+controls). After Allow, Google redirects to `http://localhost:8479/...` - the
+error page is expected, nothing listens there; its **address** contains the
+authorization code. The agent passes that whole URL to `complete_auth`, which
+exchanges it server-side and stores the refresh token in
+`YT_AUTH_STATE_FILE` (default `.youtube-mcp-auth.json`, mode 600). The
+client secret never leaves the server; state-file tokens roll without a
+restart. `reset_auth` (confirm=true) drops and revokes for account switches.
+
+One-time Google Cloud setup (10 minutes): project -> enable **YouTube Data
+API v3** -> OAuth consent screen (External, add yourself as test user) ->
+credentials -> OAuth client of type **Desktop app**. Scope requested:
+`youtube.readonly` (read-only). Watch Later is never available: Google's API
+does not expose the WL playlist to any client.
+
+`scripts/google-oauth-login.mjs` remains for humans who prefer a
+browser-on-same-machine helper; it prints the three env lines.

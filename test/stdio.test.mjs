@@ -20,7 +20,7 @@ test("initialize, list tools, call with bad input, close → process exits by it
   assert.equal(client.getServerVersion().name, "youtube-mcp");
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((t) => t.name).sort(), [
-    "get_playlist_videos", "get_transcript_languages", "get_video_comments", "get_video_download_url", "get_video_info", "get_video_transcript", "list_channel_playlists", "search_youtube",
+    "complete_auth", "get_auth_status", "get_playlist_videos", "get_transcript_languages", "get_video_comments", "get_video_download_url", "get_video_info", "get_video_transcript", "list_channel_playlists", "reset_auth", "search_youtube", "start_auth",
   ]);
   for (const t of tools) assert.ok(t.outputSchema, `${t.name} has outputSchema`);
 

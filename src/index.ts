@@ -58,6 +58,10 @@ import {
 } from "./tools/get-my-playlist-videos.js";
 import { closeClient } from "./utils/youtube-api.js";
 import { config } from "./utils/config.js";
+import { getAuthStatusTool, getAuthStatusOutputSchema } from "./tools/get-auth-status.js";
+import { startAuthTool, startAuthOutputSchema } from "./tools/start-auth.js";
+import { completeAuthTool, completeAuthSchema, completeAuthOutputSchema } from "./tools/complete-auth.js";
+import { resetAuthTool, resetAuthSchema, resetAuthOutputSchema } from "./tools/reset-auth.js";
 import { abortAll } from "./utils/abort.js";
 import { logger, withLogging } from "./utils/logger.js";
 import { randomUUID } from "node:crypto";
@@ -130,10 +134,40 @@ function createServer(): McpServer {
     outputSchema: getPlaylistVideosOutputSchema,
   }, withLogging("get_playlist_videos", getPlaylistVideos));
 
-  // Account-scoped tools exist only in authenticated installs (all three
-  // YT_GOOGLE_* variables set). Anonymous installs see exactly the 8 tools above.
-  if (config.accountAuth) {
-    logger.info("Authenticated mode: account playlist tools enabled");
+  // Auth state machine: always visible so agents can discover auth state and
+  // drive the flow (guide their human or control a browser themselves).
+  server.registerTool("get_auth_status", {
+    description:
+      "Google auth state for account-scoped tools: not_configured / not_authenticated / consent_pending / authenticated / expired, plus account name, where the token comes from, and machine-readable nextAction + instructions (for an agent to execute or relay). Always start here before start_auth. States cover first auth, re-auth after expiry, and token rolls.",
+    inputSchema: {},
+    outputSchema: getAuthStatusOutputSchema,
+  }, withLogging("get_auth_status", getAuthStatusTool));
+
+  server.registerTool("start_auth", {
+    description:
+      "Begin Google account consent (only when an OAuth client is configured - see get_auth_status). Returns a consentUrl: send the account owner there, or open it in a browser you control. After Allow, the browser lands on a localhost error page - expected; pass that page's full address to complete_auth. Consent sessions expire after 15 minutes.",
+    inputSchema: {},
+    outputSchema: startAuthOutputSchema,
+  }, withLogging("start_auth", startAuthTool));
+
+  server.registerTool("complete_auth", {
+    description:
+      "Finish Google account consent: pass the full localhost redirect URL from after Allow (contains code and state) or the bare authorization code. Exchanges it server-side, stores the refresh token (file, never in chat), and returns the authenticated state with the account name.",
+    inputSchema: completeAuthSchema.shape,
+    outputSchema: completeAuthOutputSchema,
+  }, withLogging("complete_auth", completeAuthTool));
+
+  server.registerTool("reset_auth", {
+    description:
+      "Drop the stored Google token (and revoke it at Google by default). Use for account switch, token roll after problems, or clean removal. Requires confirm=true; without it, explains what would happen. After reset, use start_auth to authenticate again.",
+    inputSchema: resetAuthSchema.shape,
+    outputSchema: resetAuthOutputSchema,
+  }, withLogging("reset_auth", resetAuthTool));
+
+  // Account tools: registered whenever an OAuth client exists; each call checks
+  // the live token state and returns actionable guidance when unauthenticated.
+  if (config.googleClient) {
+    logger.info("Account tools enabled (auth state via get_auth_status)");
     server.registerTool("list_my_playlists", {
       description:
         "List YOUR YouTube playlists (the account this server is configured for): created playlists with privacy status and video counts, plus Liked and Uploads. Paginated (50/page, use page + hasMore). Watch Later is never available: Google's API does not expose it to any client. Chain: get_my_playlist_videos with a returned playlistId, then any video tool (get_video_info, get_video_transcript, get_video_comments, get_video_download_url).",

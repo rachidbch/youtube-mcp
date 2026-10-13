@@ -11,7 +11,8 @@ test("defaults apply when env is empty", () => {
     transcriptMaxSegments: 50000,
     transcriptPageMaxSegments: 500,
     defaultTranscriptLangs: ["en"],
-    accountAuth: null,
+    googleClient: null,
+    googleRefreshTokenEnv: null,
   });
 });
 
@@ -23,19 +24,23 @@ test("YT_DEFAULT_LANGS is parsed and validated", () => {
   }
 });
 
-test("account auth: anonymous by default, all-or-nothing env", () => {
-  assert.equal(loadConfig({}).accountAuth, null);
-  const full = {
-    YT_GOOGLE_CLIENT_ID: "cid",
-    YT_GOOGLE_CLIENT_SECRET: "secret",
-    YT_GOOGLE_REFRESH_TOKEN: "rtok",
-  };
-  assert.deepEqual(loadConfig(full).accountAuth, { clientId: "cid", clientSecret: "secret", refreshToken: "rtok" });
-  for (const partial of [
-    { YT_GOOGLE_CLIENT_ID: "cid" },
-    { YT_GOOGLE_CLIENT_ID: "cid", YT_GOOGLE_CLIENT_SECRET: "secret" },
+test("account auth config: anonymous by default; client and token are separate", () => {
+  assert.equal(loadConfig({}).googleClient, null);
+  assert.equal(loadConfig({}).googleRefreshTokenEnv, null);
+
+  const clientOnly = { YT_GOOGLE_CLIENT_ID: "cid", YT_GOOGLE_CLIENT_SECRET: "secret" };
+  assert.deepEqual(loadConfig(clientOnly).googleClient, { clientId: "cid", clientSecret: "secret" });
+  assert.equal(loadConfig(clientOnly).googleRefreshTokenEnv, null); // runtime auth via tools
+
+  const full = { ...clientOnly, YT_GOOGLE_REFRESH_TOKEN: "rtok" };
+  assert.equal(loadConfig(full).googleRefreshTokenEnv, "rtok");
+
+  for (const [partial, msg] of [
+    [{ YT_GOOGLE_CLIENT_ID: "cid" }, /CLIENT_ID is set but YT_GOOGLE_CLIENT_SECRET/],
+    [{ YT_GOOGLE_CLIENT_SECRET: "secret" }, /CLIENT_SECRET is set but YT_GOOGLE_CLIENT_ID/],
+    [{ YT_GOOGLE_REFRESH_TOKEN: "rtok" }, /REFRESH_TOKEN is set but the OAuth client/],
   ]) {
-    assert.throws(() => loadConfig(partial), /Invalid account auth configuration/, JSON.stringify(partial));
+    assert.throws(() => loadConfig(partial), msg, JSON.stringify(partial));
   }
 });
 
