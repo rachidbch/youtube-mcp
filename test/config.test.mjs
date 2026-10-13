@@ -11,6 +11,7 @@ test("defaults apply when env is empty", () => {
     transcriptMaxSegments: 50000,
     transcriptPageMaxSegments: 500,
     defaultTranscriptLangs: ["en"],
+    accountAuth: null,
   });
 });
 
@@ -19,6 +20,22 @@ test("YT_DEFAULT_LANGS is parsed and validated", () => {
   for (const bad of ["", "   ", "1n", "english", "en_US"] ) {
     if (bad.trim() === "") continue; // empty falls back to the default
     assert.throws(() => loadConfig({ YT_DEFAULT_LANGS: bad }), /Invalid YT_DEFAULT_LANGS/, bad);
+  }
+});
+
+test("account auth: anonymous by default, all-or-nothing env", () => {
+  assert.equal(loadConfig({}).accountAuth, null);
+  const full = {
+    YT_GOOGLE_CLIENT_ID: "cid",
+    YT_GOOGLE_CLIENT_SECRET: "secret",
+    YT_GOOGLE_REFRESH_TOKEN: "rtok",
+  };
+  assert.deepEqual(loadConfig(full).accountAuth, { clientId: "cid", clientSecret: "secret", refreshToken: "rtok" });
+  for (const partial of [
+    { YT_GOOGLE_CLIENT_ID: "cid" },
+    { YT_GOOGLE_CLIENT_ID: "cid", YT_GOOGLE_CLIENT_SECRET: "secret" },
+  ]) {
+    assert.throws(() => loadConfig(partial), /Invalid account auth configuration/, JSON.stringify(partial));
   }
 });
 

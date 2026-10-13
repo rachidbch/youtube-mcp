@@ -466,3 +466,44 @@ This server uses YouTube's InnerTube API (the same API used by youtube.com). The
 ## License
 
 [ISC](LICENSE). This project is unofficial and is not affiliated with YouTube or Google.
+
+## Fork: anonymous vs authenticated mode (rachidbch)
+
+This fork supports two install modes, chosen at install time by environment
+variables. A restart is enough to switch; nothing else changes.
+
+**Anonymous mode (default).** Set none of the `YT_GOOGLE_*` variables. The
+server exposes the 8 public tools (video metadata, transcripts, comments,
+search, channel playlists, playlist videos, download URLs). It reaches
+YouTube the way a logged-out visitor does, so it can only ever see public
+information.
+
+**Authenticated mode.** Set all three:
+
+```
+YT_GOOGLE_CLIENT_ID=...
+YT_GOOGLE_CLIENT_SECRET=...
+YT_GOOGLE_REFRESH_TOKEN=...
+```
+
+The server additionally exposes `list_my_playlists` and
+`get_my_playlist_videos`, backed by Google's official YouTube Data API v3
+with your consent: every playlist you see on your account (public, unlisted,
+private), plus your Liked videos and channel uploads. Partial configuration
+is rejected at startup rather than starting half-working.
+
+One-time setup for the refresh token (about 10 minutes, once, then it is
+permanent unless you revoke it):
+
+1. In [Google Cloud Console](https://console.cloud.google.com/): create a
+   project, enable **YouTube Data API v3**, configure the OAuth consent
+   screen (External + add yourself as test user), and create an OAuth client
+   of type **Desktop app**.
+2. On any machine with a browser, run:
+   `YT_GOOGLE_CLIENT_ID=... YT_GOOGLE_CLIENT_SECRET=... node scripts/google-oauth-login.mjs`
+3. Click Allow in the opened page; the script prints the three lines to add
+   to your unit file or `.env`. Restart the server.
+
+Scope granted: `youtube.readonly` (read-only). Watch Later is **not**
+available in this mode: Google's API does not expose the WL playlist to any
+client. That is a Google-side limitation, not a server defect.

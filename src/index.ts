@@ -46,7 +46,18 @@ import {
   listChannelPlaylistsOutputSchema,
   listChannelPlaylistsSchema,
 } from "./tools/list-channel-playlists.js";
+import {
+  listMyPlaylists,
+  listMyPlaylistsOutputSchema,
+  listMyPlaylistsSchema,
+} from "./tools/list-my-playlists.js";
+import {
+  getMyPlaylistVideos,
+  getMyPlaylistVideosOutputSchema,
+  getMyPlaylistVideosSchema,
+} from "./tools/get-my-playlist-videos.js";
 import { closeClient } from "./utils/youtube-api.js";
+import { config } from "./utils/config.js";
 import { abortAll } from "./utils/abort.js";
 import { logger, withLogging } from "./utils/logger.js";
 import { randomUUID } from "node:crypto";
@@ -118,6 +129,25 @@ function createServer(): McpServer {
     inputSchema: getPlaylistVideosSchema.shape,
     outputSchema: getPlaylistVideosOutputSchema,
   }, withLogging("get_playlist_videos", getPlaylistVideos));
+
+  // Account-scoped tools exist only in authenticated installs (all three
+  // YT_GOOGLE_* variables set). Anonymous installs see exactly the 8 tools above.
+  if (config.accountAuth) {
+    logger.info("Authenticated mode: account playlist tools enabled");
+    server.registerTool("list_my_playlists", {
+      description:
+        "List YOUR YouTube playlists (the account this server is configured for): created playlists with privacy status and video counts, plus Liked and Uploads. Paginated (50/page, use page + hasMore). Watch Later is never available: Google's API does not expose it to any client. Chain: get_my_playlist_videos with a returned playlistId, then any video tool (get_video_info, get_video_transcript, get_video_comments, get_video_download_url).",
+      inputSchema: listMyPlaylistsSchema.shape,
+      outputSchema: listMyPlaylistsOutputSchema,
+    }, withLogging("list_my_playlists", listMyPlaylists));
+
+    server.registerTool("get_my_playlist_videos", {
+      description:
+        "List the videos of one of YOUR playlists (ID from list_my_playlists; works for Liked LL and Uploads UU ids too), in playlist order with position and added-date. Paginated (maxResults per page, default 25; use page + hasMore). Watch Later is not servable (Google API limitation). Chain: any video tool works on the returned videoIds.",
+      inputSchema: getMyPlaylistVideosSchema.shape,
+      outputSchema: getMyPlaylistVideosOutputSchema,
+    }, withLogging("get_my_playlist_videos", getMyPlaylistVideos));
+  }
 
   return server;
 }
