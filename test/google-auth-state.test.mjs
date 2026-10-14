@@ -13,7 +13,7 @@ process.env.YT_AUTH_STATE_FILE = join(stateDir, "auth.json");
 
 const mod = await import("../dist/utils/google-account.js");
 const { resetAccountForTesting, getAuthStatus, startAuth, completeAuth, resetAuth, fetchMyPlaylists } = mod;
-const { resetAuthTool } = await import("../dist/tools/reset-auth.js");
+const { authTool } = await import("../dist/tools/auth.js");
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const realFetch = globalThis.fetch;
@@ -114,10 +114,12 @@ test("complete_auth rejects a mismatched state parameter", async () => {
   );
 });
 
-test("reset_auth tool refuses without confirm=true", async () => {
-  const r = await resetAuthTool({ confirm: false, revoke: true });
-  assert.equal(r.isError, true);
-  assert.match(r._meta["youtube-mcp/error"].message, /confirm=true/);
+test("auth tool guards roll and reset with confirm=true", async () => {
+  for (const args of [{ action: "roll", domain: "endpoint" }, { action: "reset" }]) {
+    const r = await authTool(args);
+    assert.equal(r.isError, true, JSON.stringify(args));
+    assert.match(r._meta["youtube-mcp/error"].message, /confirm=true/);
+  }
 });
 
 test("account calls while unauthenticated give actionable guidance", async () => {

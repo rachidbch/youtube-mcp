@@ -514,7 +514,26 @@ device, progress shows in `get_auth_status.feedAuth`. Parsing is defensive by
 mandate: unrecognized layouts degrade to empty results with notes — never a
 crash. `reset_auth` clears this session too.
 
-### The auth state machine (agent-facing)
+### The auth tool (single, agent-facing)
+
+One tool, `auth`, drives every auth concern. No arguments returns the full
+state of all three domains with per-domain next actions - an agent decides to
+escalate a step to its human or drive a browser itself:
+
+- `endpoint`: the HTTP bearer token the server OWNS (never env-provided):
+  generated on first start, stored mode 600 (`YT_TOKEN_FILE`), logged once
+  (`[ENDPOINT TOKEN] ...`) for installers, rolled instantly via
+  `auth(action="roll", confirm=true)` or automatically when google auth
+  completes (the response carries the new token).
+- `google`: playlists consent (start -> browser Allow -> complete with the
+  localhost redirect URL). States: not_configured / not_authenticated /
+  consent_pending / authenticated / expired.
+- `feed`: one-time device code (start -> user enters it; completes by itself).
+  States: signed_out / sign_in_pending / signed_in.
+
+`auth(action="reset", confirm=true)` signs out google+feed (endpoint token
+kept so clients stay connected). Old tokens (`get_auth_status`, `start_auth`,
+`complete_auth`, `reset_auth`, `start_feed_auth`) are replaced by this tool.
 
 `get_auth_status` always tells the truth, including a live token check:
 

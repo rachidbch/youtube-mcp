@@ -128,13 +128,9 @@ try {
     "get_video_transcript",
     "list_channel_playlists",
     "search_youtube",
-    "get_auth_status",
+    "auth",
     "get_my_feed",
     "get_my_notifications",
-    "start_auth",
-    "start_feed_auth",
-    "complete_auth",
-    "reset_auth",
   ].sort();
 
   if (JSON.stringify(names) !== JSON.stringify(expected)) {

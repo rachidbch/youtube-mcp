@@ -85,3 +85,21 @@ Decision: bump all (server.json both fields) via npm version + npm install.
 CHANGELOG.md stays untouched (upstream's; only required per release tag).
 
 Consequences: small merge friction in three files; CI stays green.
+
+## ADR-006: Server-owned endpoint token + single auth tool
+
+Status: accepted (2026-10-14)
+
+Context: API_TOKEN env was invisible to installing agents and unchangeable
+without a unit edit; auth had sprawled to five tools.
+
+Decision: the server generates, owns, and rolls its HTTP token (file mode 600,
+YT_TOKEN_FILE; logged as [ENDPOINT TOKEN] at first start; API_TOKEN env
+ignored). One `auth` tool (action x domain) replaces the five auth tools;
+every response returns full state + next actions. Completing google auth
+rolls the endpoint token instantly (asymmetry: feed completion is async and
+cannot hand a new token to anyone, so it does not roll). Roll/reset require
+confirm=true; 401 bodies hint that a roll may have happened.
+
+Consequences: anonymous = 11 tools, client-configured = 13. cloudify pkg
+must surface the token line/file post-install (parked).

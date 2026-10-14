@@ -19,8 +19,10 @@ download URLs, and account-scoped data (playlists, home feed, notifications).
   streaming URLs (why download links use the ANDROID client identity).
 - LockupView: modern InnerTube page-rendering block; read structurally,
   never assume fields (duration lives in thumbnail badges, may be absent).
-- Auth state machine: get_auth_status states; account auth (Data API,
-  youtube.readonly) is SEPARATE from feedAuth (InnerTube device-code).
+- Auth: ONE auth tool with domains endpoint (server-owned bearer token,
+  file-managed, rolls instantly) / google (Data API consent) / feed
+  (InnerTube device-code). Completing google auth rolls the endpoint token
+  (response carries the new one).
 - Install shapes: anonymous (no YT_GOOGLE_* env) vs client-configured
   (YT_GOOGLE_CLIENT_ID/SECRET set; token optional, runtime-rolled).
 
@@ -39,7 +41,7 @@ download URLs, and account-scoped data (playlists, home feed, notifications).
 ## Territory map
 
 - src/index.ts: tool registration; install shape decides tool count
-  (anonymous 15, client-configured 17). Do not break the count tests
+  (anonymous 11, client-configured 13). Do not break the count tests
   (test/stdio.test.mjs, scripts/check-install.mjs expected lists).
 - src/utils/youtube-api.ts: anonymous fetchers + caches. google-account.ts:
   Data API + auth state machine. youtube-feed.ts: InnerTube session,

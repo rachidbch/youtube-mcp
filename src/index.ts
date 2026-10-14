@@ -58,11 +58,8 @@ import {
 } from "./tools/get-my-playlist-videos.js";
 import { closeClient } from "./utils/youtube-api.js";
 import { config } from "./utils/config.js";
-import { getAuthStatusTool, getAuthStatusOutputSchema } from "./tools/get-auth-status.js";
-import { startAuthTool, startAuthOutputSchema } from "./tools/start-auth.js";
-import { completeAuthTool, completeAuthSchema, completeAuthOutputSchema } from "./tools/complete-auth.js";
-import { resetAuthTool, resetAuthSchema, resetAuthOutputSchema } from "./tools/reset-auth.js";
-import { startFeedAuthTool, startFeedAuthOutputSchema } from "./tools/start-feed-auth.js";
+import { authTool, authSchema, authOutputSchema } from "./tools/auth.js";
+import { ensureEndpointToken, getCurrentEndpointToken, setHttpMode } from "./utils/endpoint-token.js";
 import { getMyFeedTool, getMyFeedSchema, getMyFeedOutputSchema } from "./tools/get-my-feed.js";
 import { getMyNotificationsTool, getMyNotificationsOutputSchema } from "./tools/get-my-notifications.js";
 import { abortAll } from "./utils/abort.js";
@@ -137,56 +134,28 @@ function createServer(): McpServer {
     outputSchema: getPlaylistVideosOutputSchema,
   }, withLogging("get_playlist_videos", getPlaylistVideos));
 
-  // Auth state machine: always visible so agents can discover auth state and
-  // drive the flow (guide their human or control a browser themselves).
-  server.registerTool("get_auth_status", {
+  // The single auth tool: state machine across endpoint token, google account,
+  // and feed session. Every response returns full state + next actions.
+  server.registerTool("auth", {
     description:
-      "Google auth state for account-scoped tools: not_configured / not_authenticated / consent_pending / authenticated / expired, plus account name, where the token comes from, and machine-readable nextAction + instructions (for an agent to execute or relay). Always start here before start_auth. States cover first auth, re-auth after expiry, and token rolls.",
-    inputSchema: {},
-    outputSchema: getAuthStatusOutputSchema,
-  }, withLogging("get_auth_status", getAuthStatusTool));
-
-  server.registerTool("start_auth", {
-    description:
-      "Begin Google account consent (only when an OAuth client is configured - see get_auth_status). Returns a consentUrl: send the account owner there, or open it in a browser you control. After Allow, the browser lands on a localhost error page - expected; pass that page's full address to complete_auth. Consent sessions expire after 15 minutes.",
-    inputSchema: {},
-    outputSchema: startAuthOutputSchema,
-  }, withLogging("start_auth", startAuthTool));
-
-  server.registerTool("complete_auth", {
-    description:
-      "Finish Google account consent: pass the full localhost redirect URL from after Allow (contains code and state) or the bare authorization code. Exchanges it server-side, stores the refresh token (file, never in chat), and returns the authenticated state with the account name.",
-    inputSchema: completeAuthSchema.shape,
-    outputSchema: completeAuthOutputSchema,
-  }, withLogging("complete_auth", completeAuthTool));
-
-  server.registerTool("reset_auth", {
-    description:
-      "Drop the stored Google token (and revoke it at Google by default). Use for account switch, token roll after problems, or clean removal. Requires confirm=true; without it, explains what would happen. After reset, use start_auth to authenticate again.",
-    inputSchema: resetAuthSchema.shape,
-    outputSchema: resetAuthOutputSchema,
-  }, withLogging("reset_auth", resetAuthTool));
+      "Auth state machine for this server, across three domains, always returning the full current state plus per-domain next actions so you can decide to escalate a step to your human or drive a browser yourself. Domains: endpoint (the HTTP bearer token the server owns; rolls instantly on google completion or auth(action=roll)), google (the account's playlists via official Google consent: start -> human/browser approves -> complete with the localhost redirect URL), feed (personalized home feed + notifications via one-time device code: start -> user enters code; completes by itself). Actions: status (default; no arguments), start, complete (google only, needs redirectUrl), roll (endpoint only, confirm), reset (confirm; signs out google+feed, keeps endpoint token). Watch Later is never available (Google API limitation).",
+    inputSchema: authSchema.shape,
+    outputSchema: authOutputSchema,
+  }, withLogging("auth", authTool));
 
   // Personalized home feed + notifications: no official API exists, so these ride
-  // the InnerTube surface behind a one-time device-code sign-in, defensively
-  // parsed (degrade to empty + note, never crash). Auth state: get_auth_status.feedAuth.
-  server.registerTool("start_feed_auth", {
-    description:
-      "One-time YouTube sign-in for personalized home feed and notifications (device-code login, like a smart TV; separate from the Google-account playlists auth). Returns a verification URL and a code: the account owner opens the URL on any device, signs in, enters the code. Progress shows in get_auth_status.feedAuth; once signed_in, get_my_feed and get_my_notifications work.",
-    inputSchema: {},
-    outputSchema: startFeedAuthOutputSchema,
-  }, withLogging("start_feed_auth", startFeedAuthTool));
-
+  // the InnerTube surface behind a one-time device-code sign-in (auth domain
+  // 'feed'), defensively parsed (degrade to empty + note, never crash).
   server.registerTool("get_my_feed", {
     description:
-      "Your personalized YouTube home-page recommendations (what YouTube recommends to the signed-in account). Requires the one-time start_feed_auth. Returns videoId/title/url/channelName up to maxResults. Note: this uses YouTube's internal API (no official one exists); on unrecognized layouts it degrades to an empty list with a note rather than erroring.",
+      "Your personalized YouTube home-page recommendations (what YouTube recommends to the signed-in account). Requires the one-time feed sign-in (auth domain 'feed', action 'start'). Returns videoId/title/url/channelName up to maxResults. Note: internal API (no official one exists); on unrecognized layouts it degrades to an empty list with a note rather than erroring.",
     inputSchema: getMyFeedSchema.shape,
     outputSchema: getMyFeedOutputSchema,
   }, withLogging("get_my_feed", getMyFeedTool));
 
   server.registerTool("get_my_notifications", {
     description:
-      "Your YouTube bell notifications for the signed-in account. Requires the one-time start_feed_auth. Returns title/sentText/read/videoUrl/channelName. Note: internal API (no official one exists); degrades to an empty list with a note on unrecognized layouts.",
+      "Your YouTube bell notifications for the signed-in account. Requires the one-time feed sign-in (auth domain 'feed', action 'start'). Returns title/sentText/read/videoUrl/channelName. Note: internal API (no official one exists); degrades to an empty list with a note on unrecognized layouts.",
     inputSchema: {},
     outputSchema: getMyNotificationsOutputSchema,
   }, withLogging("get_my_notifications", getMyNotificationsTool));
@@ -242,27 +211,29 @@ async function startStdio() {
 function startHttp() {
   const port = parseInt(process.env.PORT || "3000", 10);
   const host = process.env.HOST || "0.0.0.0";
-  const apiToken = process.env.API_TOKEN;
 
   const app = createMcpExpressApp({ host });
   // Tailscale Funnel fronts this endpoint and adds X-Forwarded-For; without
   // trust proxy, express-rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
   app.set("trust proxy", 1);
 
-  // Optional bearer token authentication
-  if (apiToken) {
-    app.use("/mcp", (req: Request, res: Response, next: NextFunction) => {
-      const authHeader = req.headers["authorization"];
-      if (!authHeader || authHeader !== `Bearer ${apiToken}`) {
-        res.status(401).json({ error: "Unauthorized: invalid or missing API token" });
-        return;
-      }
-      next();
-    });
-    logger.info("HTTP mode: bearer token authentication enabled");
-  } else {
-    logger.warn("HTTP mode: API_TOKEN not set, endpoint is unauthenticated");
-  }
+  // The server owns its token (never env-provided): generated on first start,
+  // stored mode 600, rolled instantly via the auth tool. Re-read per request.
+  const endpointToken = ensureEndpointToken();
+  setHttpMode(true);
+  app.use("/mcp", (req: Request, res: Response, next: NextFunction) => {
+    const authHeader = req.headers["authorization"];
+    if (!authHeader || authHeader !== `Bearer ${getCurrentEndpointToken()}`) {
+      res.status(401).json({
+        error:
+          "Unauthorized: invalid or missing endpoint token. Tokens roll instantly when google auth completes (auth action=complete or roll); the response of that call carries the new one.",
+      });
+      return;
+    }
+    next();
+  });
+  logger.info("HTTP mode: bearer token authentication enabled (server-managed)");
+  void endpointToken;
 
   // Rate limit: 60 requests/min per IP
   const limiter = rateLimit({

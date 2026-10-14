@@ -1,5 +1,14 @@
 # youtube-mcp — project timeline (rachidbch fork)
 
+## 2026-10-14 - Server-owned endpoint token + single auth tool
+
+- API_TOKEN env ignored; token generated, file-stored (mode 600, YT_TOKEN_FILE),
+  logged as [ENDPOINT TOKEN] at first start; auth(action=roll, confirm)
+  rotates instantly; google-auth completion auto-rolls (response carries
+  the new token; feed completion async so no roll there). 401 body hints.
+- Five auth tools folded into one semantic auth tool (action x domain);
+  anonymous 11 tools, client-configured 13. ADR-006.
+
 ## 2026-10-14 - Docs pass: AGENTS.md + ADR.md created, README fork section current
 
 - AGENTS.md: project identity, ubiquitous language, agent loop, territory
